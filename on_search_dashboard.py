@@ -15,9 +15,12 @@ uploaded_file = st.file_uploader("Upload the On-Search Excel File (with both dat
 @st.cache_data
 def load_data(file):
     df = pd.read_excel(file)
+    # Ensure date column parsing
     df['Searched On'] = pd.to_datetime(df['Searched On'], errors='coerce')
     df['searched_date'] = df['Searched On'].dt.strftime('%d-%m-%Y')
+    # Drop incomplete rows
     df = df.dropna(subset=['searched_date', 'Outlet Name', 'Buyer App'])
+    # Remove duplicates
     df['dedupe_key'] = df['searched_date'] + "-" + df['Outlet Name'] + "-" + df['Buyer App']
     df = df.drop_duplicates(subset='dedupe_key')
     return df
@@ -68,11 +71,24 @@ def extract_reason(msg):
         return "Other"
 
 def nack_summary(df_today):
-    nack_df = df_today[df_today['Status'].str.upper() == 'NACK'].copy()
+    # Handle cases where Status column might be missing
+    if 'Status' not in df_today.columns:
+        return pd.DataFrame(), pd.DataFrame(), 0
+
+    # Safe string conversion for Status
+    status_series = df_today['Status'].fillna('').astype(str).str.upper()
+    nack_df = df_today[status_series == 'NACK'].copy()
+
+    # Ensure 'Message' column exists even if 'Ondc Domain' is present before it
+    if 'Message' not in nack_df.columns:
+        nack_df['Message'] = ""
+
     nack_df['Reason'] = nack_df['Message'].apply(extract_reason)
+
     summary = nack_df.groupby(['Buyer App', 'Reason'])['Outlet Name'].nunique().reset_index()
     summary.rename(columns={'Outlet Name': 'Store Count'}, inplace=True)
-    summary.insert(0, 'S.No', range(1, len(summary) + 1))  # add serial number
+    summary.insert(0, 'S.No', range(1, len(summary) + 1))
+
     total_rejected = summary['Store Count'].sum()
     return summary, nack_df, total_rejected
 
@@ -119,7 +135,6 @@ if uploaded_file:
     dropped_apps = summary[summary['Difference'] < 0].shape[0]
 
     colA, colB, colC, colD, colE, colF = st.columns(6)
-
     colA.metric("Total Stores Today", f"{total_stores_today}", help="Number of unique stores present in today's data")
     colB.metric("Total Stores Yesterday", f"{total_stores_yesterday}", help="Number of unique stores present in yesterday's data")
     colC.metric("Buyer Apps Today", f"{total_buyer_apps_today}", help="Number of unique buyer applications in today's data")
